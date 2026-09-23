@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGIS - Controle de Recalque Topográfico (Dark Mode)</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+    
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        gray: { 750: '#2d3748', 850: '#1a202c', 950: '#0d1117' }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        body { font-family: 'Inter', sans-serif; }
+        
+        #map {
+            height: 100%;
+            width: 100%;
+            z-index: 10;
+        }
+
+        /* Custom Scrollbar Dark */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+
+        /* Marcadores do Mapa */
+        .marker-pin {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border: 3px solid #111827;
+            box-shadow: 0 0 10px rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 10px;
+            font-weight: bold;
+            transition: all 0.2s ease-in-out;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+        }
+        .marker-pin:hover {
+            transform: scale(1.2) translateY(-5px);
+            z-index: 1000 !important;
+        }
+        
+        .status-normal { background-color: #10b981; } /* Verde */
+        .status-alerta { background-color: #f59e0b; } /* Amarelo */
+        .status-critico { background-color: #ef4444; } /* Vermelho */
+
+        /* Leaflet Dark Tooltip Overrides */
+        .leaflet-tooltip {
+            background-color: #1f2937 !important;
+            color: #f3f4f6 !important;
+            border: 1px solid #374151 !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5) !important;
+        }
+        .leaflet-tooltip-top:before { border-top-color: #1f2937 !important; }
+        .leaflet-tooltip-bottom:before { border-bottom-color: #1f2937 !important; }
+        .leaflet-tooltip-left:before { border-left-color: #1f2937 !important; }
+        .leaflet-tooltip-right:before { border-right-color: #1f2937 !important; }
+        
+        /* Leaflet Layer Control Dark */
+        .leaflet-control-layers {
+            background-color: rgba(31, 41, 55, 0.9) !important;
+            color: #e5e7eb !important;
+            border: 1px solid #374151 !important;
+            border-radius: 0.5rem !important;
+            backdrop-filter: blur(4px);
+        }
+        .leaflet-control-layers-expanded { padding: 10px !important; }
+    </style>
+</head>
+<body class="bg-gray-950 text-gray-200 h-screen overflow-hidden flex">
+
+    <!-- Sidebar Principal -->
+    <aside class="w-96 bg-gray-900 shadow-2xl flex flex-col z-20 h-full border-r border-gray-800">
+        
+        <!-- Cabeçalho da Sidebar -->
+        <div class="bg-black p-5 text-white flex items-center gap-4 border-b border-gray-800">
+            <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(37,99,235,0.5)]">
+                <i class="fa-solid fa-satellite-dish text-xl"></i>
+            </div>
+            <div>
+                <h1 class="font-bold text-lg leading-tight tracking-wide">DamGeo<span class="font-light">Monitor</span></h1>
+                <p class="text-blue-400 text-xs font-medium uppercase tracking-widest">Controle de Recalque</p>
+            </div>
+        </div>
+
+        <!-- Formulário de Inserção Individual -->
+        <div class="p-5 border-b border-gray-800 bg-gray-900/50">
+            <h2 class="text-sm font-bold text-gray-300 mb-4 uppercase tracking-wider flex items-center gap-2">
+                <i class="fa-solid fa-crosshairs text-blue-500"></i> Entrada Manual
+            </h2>
+            <form id="form-leitura" class="space-y-4">
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-semibold text-gray-400 mb-1 uppercase">Ponto / Marco</label>
+                        <select id="ponto-select" required class="w-full text-sm border border-gray-700 rounded p-2 bg-gray-800 text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+                            <!-- Preenchido via JS -->
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-semibold text-gray-400 mb-1 uppercase">Data da Leitura</label>
+                        <input type="date" id="data-input" required class="w-full text-sm border border-gray-700 rounded p-2 bg-gray-800 text-white focus:ring-2 focus:ring-blue-500 outline-none" style="color-scheme: dark;">
+                    </div>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-semibold text-gray-400 mb-1 uppercase">Norte (N)</label>
+                        <input type="number" step="0.001" id="n-input" required placeholder="7622823.527" class="w-full text-sm border border-gray-700 rounded p-2 bg-gray-800 text-white focus:ring-2 focus:ring-blue-500 outline-none font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-semibold text-gray-400 mb-1 uppercase">Leste (E)</label>
+                        <input type="number" step="0.001" id="e-input" required placeholder="665456.783" class="w-full text-sm border border-gray-700 rounded p-2 bg-gray-800 text-white focus:ring-2 focus:ring-blue-500 outline-none font-mono">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-[11px] font-semibold text-gray-400 mb-1 uppercase">Altitude Atual (H) [m]</label>
+                    <input type="number" step="0.001" id="h-input" required placeholder="Ex: 632.608" class="w-full text-sm border border-gray-600 rounded p-2 bg-gray-800 text-blue-300 font-bold focus:ring-2 focus:ring-blue-500 outline-none font-mono">
+                </div>
+
+                <button type="submit" id="btn-salvar" class="w-full bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold py-2.5 rounded transition-colors shadow-lg flex justify-center items-center gap-2">
+                    <i class="fa-solid fa-save"></i> Registrar Leitura
+                </button>
+            </form>
+        </div>
+
+        <!-- Importação em Lote -->
+        <details class="group border-b border-gray-800 bg-gray-850">
+            <summary class="p-4 text-sm font-bold text-gray-300 uppercase tracking-wider flex items-center justify-between cursor-pointer list-none hover:bg-gray-800 transition-colors">
+                <span class="flex items-center gap-2"><i class="fa-solid fa-table text-emerald-500"></i> Importação em Lote</span>
+                <i class="fa-solid fa-chevron-down group-open:rotate-180 transition-transform text-gray-500"></i>
+            </summary>
+            <div class="px-5 pb-5">
+                <div class="bg-gray-900 p-2 rounded mb-3 border border-gray-700">
+                    <p class="text-[10px] text-gray-400 leading-relaxed font-mono">
+                        Cole do Excel (tabulação). Ordem requerida:<br>
+                        <span class="text-blue-400">ID | Norte (Y) | Leste (X) | Cota (H)</span><br>
+                        *Se houver índice no início, ele será ignorado.
+                    </p>
+                </div>
+                <textarea id="textarea-lote" class="w-full text-xs border border-gray-700 rounded p-2 bg-gray-900 text-gray-300 focus:ring-2 focus:ring-emerald-500 h-24 outline-none font-mono resize-none" placeholder="PVMS001&#9;7622789,859&#9;665481,566&#9;632,677"></textarea>
+                <button type="button" id="btn-processar-lote" onclick="processarLote()" class="w-full mt-3 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold py-2.5 rounded transition-colors shadow-lg flex justify-center items-center gap-2">
+                    <i class="fa-solid fa-microchip"></i> Processar (EPSG:31983)
+                </button>
+                <div id="msg-lote" class="text-[10px] mt-2 text-center hidden font-bold"></div>
+            </div>
+        </details>
+
+        <!-- Lista de Marcos -->
+        <div class="p-4 bg-gray-900 border-b border-gray-800 flex justify-between items-center shadow-md z-10">
+            <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest">Marcos Monitorados</h3>
+            <span class="text-xs font-bold bg-blue-900/50 text-blue-400 border border-blue-800 px-2 py-0.5 rounded-full" id="contador-pontos">0</span>
+        </div>
+        
+        <div class="flex-1 overflow-y-auto p-3 space-y-2 bg-gray-950" id="lista-pontos">
+            <!-- Itens gerados dinamicamente -->
+            <div class="text-center p-5 text-gray-600 text-xs italic">Carregando dados...</div>
+        </div>
+    </aside>
+
+    <!-- Área do Mapa -->
+    <main class="flex-1 relative">
+        <div id="map"></div>
+        
+        <!-- Legenda Status (Dark) -->
+        <div class="absolute bottom-6 left-6 z-[1000] bg-gray-900/90 backdrop-blur border border-gray-700 p-4 rounded-xl shadow-2xl">
+            <h4 class="text-[10px] font-bold text-gray-400 mb-3 uppercase tracking-widest border-b border-gray-700 pb-2">Status de Recalque</h4>
+            <div class="space-y-2.5 text-xs text-gray-300 font-medium">
+                <div class="flex items-center gap-3"><div class="w-3.5 h-3.5 rounded-full status-normal shadow-[0_0_8px_#10b981]"></div> Normal (&lt; 15mm)</div>
+                <div class="flex items-center gap-3"><div class="w-3.5 h-3.5 rounded-full status-alerta shadow-[0_0_8px_#f59e0b]"></div> Alerta (15 - 30mm)</div>
+                <div class="flex items-center gap-3"><div class="w-3.5 h-3.5 rounded-full status-critico shadow-[0_0_8px_#ef4444]"></div> Crítico (&gt; 30mm)</div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Modal de Análise e Gráfico (Dark) -->
+    <div id="modal-analise" class="fixed inset-0 bg-black/80 z-[2000] hidden flex justify-center items-center backdrop-blur-sm transition-opacity opacity-0" style="transition: opacity 0.3s;">
+        <div class="bg-gray-900 w-11/12 max-w-6xl rounded-xl shadow-2xl border border-gray-700 flex flex-col h-[85vh] overflow-hidden transform scale-95 transition-transform duration-300" id="modal-content">
+            
+            <!-- Header Modal -->
+            <div class="p-5 border-b border-gray-800 flex justify-between items-center bg-gray-850">
+                <div class="flex items-center gap-4">
+                    <div class="bg-blue-900/50 text-blue-400 p-2 rounded-lg border border-blue-800/50">
+                        <i class="fa-solid fa-chart-line text-xl"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-xl font-bold text-white tracking-wide" id="modal-titulo">MARCO-01</h2>
+                        <p class="text-xs text-gray-400 uppercase tracking-widest mt-0.5">Análise Histórica de Altitude</p>
+                    </div>
+                </div>
+                <button onclick="fecharModal()" class="w-8 h-8 flex items-center justify-center rounded bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white transition-colors border border-gray-700">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <!-- Corpo Modal -->
+            <div class="flex-1 overflow-y-auto p-6 flex flex-col gap-6 bg-gray-950">
+                
+                <!-- KPIs Dark -->
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div class="bg-gray-850 p-4 rounded-lg border border-gray-800 flex flex-col justify-center relative overflow-hidden">
+                        <div class="absolute right-0 top-0 opacity-10"><i class="fa-solid fa-flag text-6xl"></i></div>
+                        <p class="text-[10px] text-gray-500 font-bold uppercase tracking-widest">Cota Base (Projeto)</p>
+                        <p class="text-2xl font-bold text-gray-200 font-mono mt-1" id="kpi-cota-proj">-- m</p>
+                    </div>
+                    <div class="bg-gray-850 p-4 rounded-lg border border-gray-800 flex flex-col justify-center relative overflow-hidden">
+                        <div class="absolute right-0 top-0 opacity-10"><i class="fa-solid fa-location-crosshairs text-6xl text-blue-500"></i></div>
+                        <p class="text-[10px] text-gray-500 font-bold uppercase tracking-widest">Última Leitura (H)</p>
+                        <p class="text-2xl font-bold text-blue-400 font-mono mt-1 drop-shadow-md" id="kpi-cota-atual">-- m</p>
+                    </div>
+                    <div class="bg-gray-850 p-4 rounded-lg border border-gray-800 flex flex-col justify-center relative overflow-hidden">
+                        <div class="absolute right-0 top-0 opacity-10"><i class="fa-solid fa-arrow-down-short-wide text-6xl"></i></div>
+                        <p class="text-[10px] text-gray-500 font-bold uppercase tracking-widest">Recalque Máximo</p>
+                        <p class="text-2xl font-bold font-mono mt-1" id="kpi-recalque">-- mm</p>
+                    </div>
+                    <div class="bg-gray-850 p-4 rounded-lg border border-gray-800 flex flex-col justify-center">
+                        <p class="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-2">Classificação de Risco</p>
+                        <div id="kpi-status-container" class="flex items-center gap-2">
+                            <span class="px-3 py-1 text-xs font-bold rounded" id="kpi-status">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Gráfico Chart.js Dark -->
+                <div class="bg-gray-850 p-5 rounded-lg border border-gray-800 flex-1 min-h-[350px] relative">
+                    <div class="absolute top-4 right-4 flex gap-2">
+                        <span class="flex items-center gap-1 text-[10px] text-gray-400"><div class="w-3 h-1 bg-blue-500"></div> H Medido</span>
+                        <span class="flex items-center gap-1 text-[10px] text-gray-400"><div class="w-3 h-1 border-b-2 border-dashed border-gray-500"></div> H Base</span>
+                    </div>
+                    <div class="relative h-[300px] md:h-[400px] w-full mt-2">
+                        <canvas id="graficoAltitude"></canvas>
+                    </div>
+                </div>
+
+                <!-- Tabela de Histórico Dark -->
+                <div class="bg-gray-850 rounded-lg border border-gray-800 overflow-hidden">
+                    <div class="p-3 bg-gray-900 border-b border-gray-800">
+                        <h3 class="font-bold text-gray-300 text-xs uppercase tracking-widest"><i class="fa-solid fa-table-list mr-2"></i>Histórico de Leituras</h3>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm text-left whitespace-nowrap">
+                            <thead class="bg-gray-800 text-gray-400 text-[11px] uppercase tracking-wider">
+                                <tr>
+                                    <th class="px-4 py-3 font-semibold">Data da Leitura</th>
+                                    <th class="px-4 py-3 font-semibold text-right">Norte (N)</th>
+                                    <th class="px-4 py-3 font-semibold text-right">Leste (E)</th>
+                                    <th class="px-4 py-3 font-semibold text-right">Altitude H [m]</th>
+                                    <th class="px-4 py-3 font-semibold text-right border-l border-gray-700 bg-gray-900/50">Recalque [mm]</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tabela-historico" class="divide-y divide-gray-800 text-gray-300 text-xs">
+                                <!-- Preenchido via JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        // Definição do CRS EPSG:31983 (SIRGAS 2000 / UTM zone 23S) - Essencial para Minas Gerais
+        proj4.defs("EPSG:31983","+proj=utm +zone=23 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs");
+
+        // Estado Global da Aplicação
+        // Começamos com a base zerada e inserimos os dados fornecidos
+        const db = {
+            pontos: [],
+            leituras: {}
+        };
+
+        let map;
+        let markers = {};
+        let graficoAtual = null;
+
+        // Base maps de alta resolução solicitados
+        const basemaps = {
+            "Google Hybrid (Padrão)": L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+                attribution: '&copy; Google', maxZoom: 22
+            }),
+            "Google Satellite": L.tileLayer('https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+                attribution: '&copy; Google', maxZoom: 22
+            }),
+            "ESRI World Imagery": L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                attribution: '&copy; Esri', maxZoom: 19
+            })
+        };
+
+        // --- Funções de Negócio ---
+
+        function calcularRecalque(h0, h_atual) {
+            // Cota Inicial (H0) - Cota Atual (H_atual) = Recalque. 
+            // Positivo significa que desceu. * 1000 converte m para mm.
+            return ((h0 - h_atual) * 1000);
+        }
+
+        function avaliarStatus(recalqueMm) {
+            if (recalqueMm > 30) return { classe: 'status-critico', texto: 'CRÍTICO', cor: '#ef4444', textClass: 'text-red-400', bgClass: 'bg-red-900/40 border border-red-800' };
+            if (recalqueMm >= 15) return { classe: 'status-alerta', texto: 'ALERTA', cor: '#f59e0b', textClass: 'text-yellow-400', bgClass: 'bg-yellow-900/40 border border-yellow-800' };
+            return { classe: 'status-normal', texto: 'NORMAL', cor: '#10b981', textClass: 'text-emerald-400', bgClass: 'bg-emerald-900/40 border border-emerald-800' };
+        }
+
+        function obterLeiturasOrdenadas(pontoId) {
+            const leituras = db.leituras[pontoId] || [];
+            return [...leituras].sort((a, b) => new Date(a.data) - new Date(b.data));
+        }
+
+        function initMap() {
+            // Inicializa no centro aproximado dos dados UTM fornecidos (convertidos)
+            map = L.map('map', { 
+                zoomControl: false,
+                layers: [basemaps["Google Hybrid (Padrão)"]] // Definindo o padrão solicitado
+            }).setView([-20.1, -43.8], 15); 
+
+            L.control.zoom({ position: 'topright' }).addTo(map);
+            
+            // Controle de Camadas (Layer Control)
+            L.control.layers(basemaps, {}, { position: 'bottomright' }).addTo(map);
+
+            // Carrega os dados de exemplo fornecidos na inicialização para popular a dashboard
+            carregarDadosIniciais();
+        }
+
+        // --- Funções de Interface UI ---
+
+        function atualizarInterface() {
+            // Limpa marcadores
+            Object.values(markers).forEach(m => map.removeLayer(m));
+            markers = {};
+
+            const listaContainer = document.getElementById('lista-pontos');
+            listaContainer.innerHTML = '';
+            document.getElementById('contador-pontos').innerText = db.pontos.length;
+            
+            if(db.pontos.length === 0) {
+                 listaContainer.innerHTML = '<div class="text-center p-5 text-gray-600 text-xs italic border border-gray-800 rounded bg-gray-900/50 mt-2">Nenhum marco inserido ainda. Utilize a importação em lote.</div>';
+                 return;
+            }
+
+            // Ordenar pontos alfabeticamente
+            const pontosOrdenados = [...db.pontos].sort((a, b) => a.id.localeCompare(b.id));
+
+            pontosOrdenados.forEach(ponto => {
+                const leituras = obterLeiturasOrdenadas(ponto.id);
+                const ultima = leituras.length > 0 ? leituras[leituras.length - 1] : null;
+                
+                let h_atual = ultima ? ultima.h : ponto.h0;
+                let recalque = calcularRecalque(ponto.h0, h_atual);
+                const status = avaliarStatus(recalque);
+
+                // Criar Marcador Leaflet Customizado (DivIcon)
+                const iconHtml = `<div class="marker-pin ${status.classe}"><span>${ponto.id.substring(0,3)}</span></div>`;
+                const icon = L.divIcon({ className: 'bg-transparent', html: iconHtml, iconSize: [30, 30], iconAnchor: [15, 15] });
+
+                const marker = L.marker([ponto.lat, ponto.lng], { icon: icon }).addTo(map);
+                
+                // Tooltip Dark Mode
+                marker.bindTooltip(`
+                    <div class="font-sans">
+                        <div class="font-bold text-base border-b border-gray-700 pb-1 mb-1">${ponto.id}</div>
+                        <div class="text-xs text-gray-300">Ref (H0): <span class="font-mono">${ponto.h0.toFixed(4)}</span> m</div>
+                        <div class="text-xs text-gray-300">Atual (H): <span class="font-mono">${h_atual.toFixed(4)}</span> m</div>
+                        <div class="text-sm mt-1 pt-1 border-t border-gray-700">Recalque: <b style="color:${status.cor}">${recalque.toFixed(1)} mm</b></div>
+                    </div>
+                `);
+                
+                marker.on('click', () => abrirAnalise(ponto.id));
+                markers[ponto.id] = marker;
+
+                // Item na Sidebar (Dark)
+                const div = document.createElement('div');
+                div.className = 'bg-gray-850 p-3 rounded border border-gray-800 cursor-pointer hover:border-blue-500 hover:bg-gray-800 transition-all group';
+                div.onclick = () => {
+                    map.flyTo([ponto.lat, ponto.lng], 20, { duration: 1.5 });
+                    abrirAnalise(ponto.id);
+                };
+                
+                div.innerHTML = `
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="font-bold text-gray-200 text-sm group-hover:text-blue-400 transition-colors"><i class="fa-solid fa-location-dot text-gray-600 mr-1.5 text-xs"></i>${ponto.id}</span>
+                        <span class="text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${status.bgClass} ${status.textClass}">${status.texto}</span>
+                    </div>
+                    <div class="flex justify-between text-[11px] font-mono bg-gray-950 p-1.5 rounded border border-gray-800 text-gray-400">
+                        <span>H: <span class="text-gray-300">${h_atual.toFixed(3)}</span>m</span>
+                        <span>&Delta; <span class="${status.textClass} font-bold">${recalque.toFixed(1)} mm</span></span>
+                    </div>
+                `;
+                listaContainer.appendChild(div);
+            });
+        }
+
+        function preencherSelectFormulario() {
+            const select = document.getElementById('ponto-select');
+            select.innerHTML = '<option value="">Selecione o marco...</option>';
+            db.pontos.sort((a,b)=>a.id.localeCompare(b.id)).forEach(p => {
+                select.innerHTML += `<option value="${p.id}">${p.id}</option>`;
+            });
+            document.getElementById('data-input').value = new Date().toISOString().split('T')[0];
+        }
+
+        document.getElementById('ponto-select').addEventListener('change', (e) => {
+            const id = e.target.value;
+            if(!id) return;
+            const pt = db.pontos.find(p => p.id === id);
+            const ultima = obterLeiturasOrdenadas(id).pop();
+            
+            // Sugere a última coordenada N e E lida para facilitar
+            document.getElementById('n-input').value = ultima ? ultima.n : pt.n_ref;
+            document.getElementById('e-input').value = ultima ? ultima.e : pt.e_ref;
+            document.getElementById('h-input').value = ultima ? ultima.h : pt.h0;
+        });
+
+        document.getElementById('form-leitura').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const id = document.getElementById('ponto-select').value;
+            if(!id) return;
+
+            const data = document.getElementById('data-input').value;
+            const n = parseFloat(document.getElementById('n-input').value);
+            const e_coord = parseFloat(document.getElementById('e-input').value);
+            const h = parseFloat(document.getElementById('h-input').value);
+
+            if (!db.leituras[id]) db.leituras[id] = [];
+            
+            // Atualiza leitura do dia ou cria nova
+            const index = db.leituras[id].findIndex(l => l.data === data);
+            if (index >= 0) db.leituras[id][index] = { data, n, e: e_coord, h };
+            else db.leituras[id].push({ data, n, e: e_coord, h });
+
+            const btn = document.getElementById('btn-salvar');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fa-solid fa-check"></i> Gravado!';
+            btn.classList.replace('bg-blue-600', 'bg-emerald-600');
+            
+            atualizarInterface();
+
+            setTimeout(() => {
+                btn.innerHTML = originalText;
+                btn.classList.replace('bg-emerald-600', 'bg-blue-600');
+                document.getElementById('h-input').value = '';
+            }, 2000);
+        });
+
+        function abrirAnalise(pontoId) {
+            const ponto = db.pontos.find(p => p.id === pontoId);
+            const leituras = obterLeiturasOrdenadas(pontoId);
+            const ultima = leituras.length > 0 ? leituras[leituras.length - 1] : null;
+            
+            let h_atual = ultima ? ultima.h : ponto.h0;
+            let recalque_max = 0;
+            
+            // Procura o maior recalque no histórico
+            leituras.forEach(l => {
+                let rec = calcularRecalque(ponto.h0, l.h);
+                if(rec > recalque_max) recalque_max = rec;
+            });
+            // Se o atual for maior, garante o atual (no caso de elevação, recalque é negativo)
+            const recalque_atual = calcularRecalque(ponto.h0, h_atual);
+            if (recalque_atual > recalque_max) recalque_max = recalque_atual;
+
+            const status = avaliarStatus(recalque_atual);
+
+            document.getElementById('modal-titulo').innerText = ponto.id;
+            document.getElementById('kpi-cota-proj').innerText = `${ponto.h0.toFixed(4)} m`;
+            document.getElementById('kpi-cota-atual').innerText = `${h_atual.toFixed(4)} m`;
+            document.getElementById('kpi-recalque').innerText = `${recalque_atual.toFixed(1)} mm`;
+            document.getElementById('kpi-recalque').className = `text-2xl font-bold font-mono mt-1 ${status.textClass}`;
+            
+            document.getElementById('kpi-status-container').innerHTML = `<span class="px-3 py-1 text-xs font-bold rounded uppercase tracking-wider ${status.bgClass} ${status.textClass}">${status.texto}</span>`;
+
+            // Preenche Tabela (Dark Mode)
+            const tbody = document.getElementById('tabela-historico');
+            tbody.innerHTML = `
+                <tr class="bg-blue-900/20 border-b border-gray-700">
+                    <td class="px-4 py-3 font-semibold text-blue-400">REF (Instalação)</td>
+                    <td class="px-4 py-3 text-right font-mono">${ponto.n_ref.toFixed(3)}</td>
+                    <td class="px-4 py-3 text-right font-mono">${ponto.e_ref.toFixed(3)}</td>
+                    <td class="px-4 py-3 text-right font-mono font-bold text-blue-400">${ponto.h0.toFixed(4)}</td>
+                    <td class="px-4 py-3 text-right font-mono text-gray-500 bg-gray-900/50">0.0</td>
+                </tr>
+            `;
+
+            [...leituras].reverse().forEach(l => {
+                const rec = calcularRecalque(ponto.h0, l.h);
+                const st = avaliarStatus(rec);
+                const [ano, mes, dia] = l.data.split('-');
+                
+                tbody.innerHTML += `
+                    <tr class="hover:bg-gray-800/50 transition-colors">
+                        <td class="px-4 py-2">${dia}/${mes}/${ano}</td>
+                        <td class="px-4 py-2 text-right font-mono text-gray-400">${l.n.toFixed(3)}</td>
+                        <td class="px-4 py-2 text-right font-mono text-gray-400">${l.e.toFixed(3)}</td>
+                        <td class="px-4 py-2 text-right font-mono font-bold text-gray-200">${l.h.toFixed(4)}</td>
+                        <td class="px-4 py-2 text-right font-mono font-bold ${st.textClass} bg-gray-900/30 border-l border-gray-800">${rec.toFixed(1)}</td>
+                    </tr>
+                `;
+            });
+
+            renderizarGrafico(ponto, leituras);
+            
+            const modal = document.getElementById('modal-analise');
+            const content = document.getElementById('modal-content');
+            modal.classList.remove('hidden');
+            // Timeout para animação de opacidade e escala
+            setTimeout(() => {
+                modal.classList.remove('opacity-0');
+                content.classList.remove('scale-95');
+            }, 10);
+        }
+
+        function fecharModal() {
+            const modal = document.getElementById('modal-analise');
+            const content = document.getElementById('modal-content');
+            modal.classList.add('opacity-0');
+            content.classList.add('scale-95');
+            setTimeout(() => modal.classList.add('hidden'), 300);
+        }
+
+        function renderizarGrafico(ponto, leituras) {
+            const ctx = document.getElementById('graficoAltitude').getContext('2d');
+            if (graficoAtual) graficoAtual.destroy();
+
+            // Configuração global do Chart.js para Dark Mode
+            Chart.defaults.color = '#9ca3af'; 
+            Chart.defaults.font.family = 'Inter';
+
+            const labels = [];
+            const dataH = [];
+            const dataH0 = [];
+
+            if (leituras.length > 0) {
+                // Adiciona ponto fake para mostrar a referência no gráfico visualmente antes da leitura 1
+                labels.push('Ref. Base');
+                dataH.push(ponto.h0);
+                dataH0.push(ponto.h0);
+            }
+
+            leituras.forEach(l => {
+                const [ano, mes, dia] = l.data.split('-');
+                labels.push(`${dia}/${mes}/${ano}`);
+                dataH.push(l.h);
+                dataH0.push(ponto.h0);
+            });
+
+            const todasAlturas = [ponto.h0, ...leituras.map(l => l.h)];
+            const minH = Math.min(...todasAlturas);
+            const maxH = Math.max(...todasAlturas);
+            const diff = maxH - minH;
+            const padding = diff === 0 ? 0.020 : diff * 0.2; // Espaçamento dinâmico do eixo Y
+
+            graficoAtual = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Altitude H [m]',
+                            data: dataH,
+                            borderColor: '#3b82f6', // blue-500
+                            backgroundColor: '#3b82f6',
+                            borderWidth: 3,
+                            pointRadius: 5,
+                            pointHoverRadius: 8,
+                            pointBackgroundColor: '#1f2937', // gray-800
+                            pointBorderColor: '#3b82f6',
+                            pointBorderWidth: 2,
+                            tension: 0.2, // Curva suave
+                            zIndex: 10
+                        },
+                        {
+                            label: 'Base H0 [m]',
+                            data: dataH0,
+                            borderColor: '#6b7280', // gray-500
+                            borderWidth: 2,
+                            borderDash: [5, 5],
+                            pointRadius: 0,
+                            fill: {
+                                target: 0,
+                                // Cores translúcidas dependendo se subiu ou desceu
+                                above: 'rgba(239, 68, 68, 0.05)', // Vermelho fraco se recalcou (H medido < H0 -> preenche 'above' para baixo)
+                                below: 'rgba(16, 185, 129, 0.05)'
+                            },
+                            zIndex: 5
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { display: false }, // Legenda customizada via HTML
+                        tooltip: {
+                            backgroundColor: 'rgba(17, 24, 39, 0.95)',
+                            titleColor: '#e5e7eb',
+                            bodyColor: '#e5e7eb',
+                            borderColor: '#374151',
+                            borderWidth: 1,
+                            padding: 10,
+                            callbacks: {
+                                label: function(context) {
+                                    return `${context.dataset.label}: ${context.parsed.y.toFixed(4)} m`;
+                                },
+                                afterBody: function(context) {
+                                    if (context.length > 0 && context[0].dataIndex > 0) {
+                                        const h_medido = dataH[context[0].dataIndex];
+                                        const rec = ((ponto.h0 - h_medido) * 1000).toFixed(1);
+                                        const sinal = rec > 0 ? 'Desceu' : 'Subiu';
+                                        return `\nRecalque: ${rec} mm (${sinal})`;
+                                    }
+                                    return '';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            min: minH - padding,
+                            max: maxH + padding,
+                            grid: { color: 'rgba(75, 85, 99, 0.2)' },
+                            border: { color: 'rgba(75, 85, 99, 0.5)' },
+                            ticks: {
+                                callback: val => val.toFixed(3),
+                                color: '#9ca3af'
+                            }
+                        },
+                        x: {
+                            grid: { display: false },
+                            border: { color: 'rgba(75, 85, 99, 0.5)' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function processarLote(dadosString = null) {
+            const textarea = document.getElementById('textarea-lote');
+            const texto = dadosString || textarea.value;
+            const msgBox = document.getElementById('msg-lote');
+            
+            if (!texto.trim()) {
+                if(!dadosString) {
+                    msgBox.innerHTML = '<span class="text-red-400">Cole os dados na área de texto primeiro.</span>';
+                    msgBox.classList.remove('hidden');
+                }
+                return;
+            }
+
+            const linhas = texto.split('\n');
+            let inseridos = 0;
+            const dataHoje = new Date().toISOString().split('T')[0];
+
+            // Parser robusto para pt-BR
+            const pFloat = (str) => {
+                if (!str) return NaN;
+                let s = str.toString().trim();
+                if (s.includes('.') && s.includes(',')) s = s.replace(/\./g, '');
+                s = s.replace(',', '.');
+                return parseFloat(s);
+            };
+
+            linhas.forEach(linha => {
+                if(!linha.trim()) return;
+                const cols = linha.trim().split('\t');
+                
+                let id = '', nStr = '', eStr = '', hStr = '';
+                
+                // Trata a estrutura (Índice, ID, N, E, H) ou (ID, N, E, H) baseada no seu exemplo
+                // Verifica se a primeira coluna é número puro (índice) e descartamos
+                let isFirstNum = !isNaN(parseFloat(cols[0].replace(',','.'))) && !isNaN(cols[0] * 1);
+                
+                if (cols.length >= 5 && isFirstNum) {
+                    id = cols[1]; nStr = cols[2]; eStr = cols[3]; hStr = cols[4];
+                } else if (cols.length >= 4) {
+                    id = cols[0]; nStr = cols[1]; eStr = cols[2]; hStr = cols[3];
+                } else {
+                    return; // Ignora linha mal formatada
+                }
+
+                let n = pFloat(nStr);
+                let e = pFloat(eStr);
+                let h = pFloat(hStr);
+
+                // Garante N ~7mi, E ~600k (Regra zona 23S)
+                if (e > n) { [n, e] = [e, n]; } 
+
+                if (!id || isNaN(n) || isNaN(e) || isNaN(h)) return;
+
+                // Transforma UTM SIRGAS 2000 (Z23S) -> WGS84 (Lat/Lng)
+                // O Leaflet espera [lat, lng], Proj4js devolve [lng, lat] (X, Y)
+                let lngLat;
+                try {
+                    lngLat = proj4("EPSG:31983", "EPSG:4326", [e, n]);
+                } catch (err) {
+                    console.error("Erro no Proj4", err);
+                    return;
+                }
+                
+                const lng = lngLat[0];
+                const lat = lngLat[1];
+
+                // Busca Ponto ou Cria
+                let ponto = db.pontos.find(p => p.id === id);
+                if (!ponto) {
+                    // Trata a primeira inserção como "Cota de Projeto" (H0)
+                    ponto = { id, lat, lng, h0: h, n_ref: n, e_ref: e };
+                    db.pontos.push(ponto);
+                }
+
+                // Salva leitura
+                if (!db.leituras[id]) db.leituras[id] = [];
+                const idxLeitura = db.leituras[id].findIndex(l => l.data === dataHoje);
+                if (idxLeitura >= 0) db.leituras[id][idxLeitura] = { data: dataHoje, n, e, h };
+                else db.leituras[id].push({ data: dataHoje, n, e, h });
+
+                inseridos++;
+            });
+
+            if (inseridos > 0) {
+                atualizarInterface();
+                preencherSelectFormulario();
+                
+                // Enquadrar no mapa
+                const bounds = L.latLngBounds(db.pontos.map(p => [p.lat, p.lng]));
+                map.fitBounds(bounds, { padding: [50, 50], maxZoom: 18 });
+
+                if(!dadosString) {
+                    textarea.value = '';
+                    msgBox.innerHTML = `<span class="text-emerald-400"><i class="fa-solid fa-check mr-1"></i> ${inseridos} pontos importados/atualizados!</span>`;
+                    msgBox.classList.remove('hidden');
+                    setTimeout(() => msgBox.classList.add('hidden'), 4000);
+                }
+            } else if (!dadosString) {
+                msgBox.innerHTML = '<span class="text-red-400">Falha ao ler dados. Verifique a formatação.</span>';
+                msgBox.classList.remove('hidden');
+            }
+        }
+
+        // Função para simular o carregamento dos dados que você postou antes
+        function carregarDadosIniciais() {
+            const mockData = `1	M16PIA	7622823,527	665456,7838	632,6084
+2	M04	7622789,759	665487,5527	633,2026
+3	PVMS001	7622789,859	665481,566	632,6778
+4	PIBTMS006	7622831,255	665443,8799	632,2199
+5	PIBTMS005	7622833,052	665431,4172	632,2786
+6	PIBTMS004	7622837,975	665400,0301	632,4185
+7	PIBTMS003	7622841,63	665377,1821	632,2755
+8	PIBTMS002	7622845,164	665353,3507	632,838
+9	M03	7622833,594	665341,0694	634,1541
+10	PIBTMS001	7622846,626	665343,9481	633,4273
+11	PIBTMS101	7622853,487	665390,79	626,622
+12	PIBTMS102	7622848,831	665420,5231	626,6948
+13	PIBTMS103	7622846,362	665434,8533	626,6441
+14	PIBTMS203	7622858,396	665436,7917	621,5335
+15	PIBTMS202	7622860,588	665422,4103	621,7428
+16	PIBTMS201	7622865,146	665392,7126	621,6409
+17	PIBTMS301	7622876,836	665394,5421	616,7291
+18	PIBTMS302	7622872,242	665424,1495	616,7738
+19	PIBTMS303	7622870,232	665438,5683	616,6248
+20	PV	7622887,763	665387,813	614,0801`;
+            
+            processarLote(mockData);
+
+            // Simular algumas leituras passadas para o PVMS001 para ver o gráfico funcionando bem
+            if (db.pontos.length > 0) {
+                const pt = db.pontos.find(p => p.id === 'PVMS001');
+                if(pt && db.leituras['PVMS001']) {
+                    db.leituras['PVMS001'].push(
+                        { data: '2023-01-15', n: pt.n_ref, e: pt.e_ref, h: pt.h0 - 0.005 },
+                        { data: '2023-06-20', n: pt.n_ref, e: pt.e_ref, h: pt.h0 - 0.012 },
+                        { data: '2023-11-10', n: pt.n_ref, e: pt.e_ref, h: pt.h0 - 0.018 }
+                    );
+                }
+            }
+            atualizarInterface();
+        }
+
+        // Event Listeners globais
+        window.onload = initMap;
+        document.getElementById('modal-analise').addEventListener('click', (e) => {
+            if (e.target.id === 'modal-analise') fecharModal();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') fecharModal();
+        });
+    </script>
+</body>
+</html>
